@@ -34,7 +34,7 @@ CopyQ is optional history integration. It is not a correctness or persistence ba
 
 ## Application-copy boundary
 
-Wayland does not provide a universal semantic API for "serialize the current arbitrary selection." Rich capture therefore uses the active application's Copy behavior. A safe Copy accelerator is attempted where appropriate; application profiles control fallbacks such as terminal `Ctrl+Shift+C`.
+Wayland does not provide a universal semantic API for "serialize the current arbitrary selection." Rich capture therefore uses the active application's Copy behavior. A generic Copy probe is attempted only where the application profile declares the ordinary `copy` strategy. `primary-first` terminal profiles use an affine primary selection when available and otherwise go directly to their explicit profile Copy accelerator such as terminal `Ctrl+Shift+C`; they do not receive the generic probe first.
 
 Primary selection is an explicit alternate capture source, not a silent fallback for a failed application Copy.
 

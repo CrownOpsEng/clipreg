@@ -1339,6 +1339,44 @@ static int capture_primary_if_affine(struct daemon_state*d,struct item*out){
     return snapshot_current(d,SEL_PRIMARY,out);
 }
 
+struct grab_copy_plan {
+    const char *first_chord;
+    const char *fallback_chord;
+    int first_timeout_ms;
+};
+
+static struct grab_copy_plan grab_copy_plan_for_profile(const struct daemon_state *d,
+                                                        const struct app_profile *p) {
+    struct grab_copy_plan plan = {0};
+    if (!d || !p) return plan;
+
+    if (!strcmp(p->grab_strategy, "primary-only")) return plan;
+
+    if (!strcmp(p->grab_strategy, "primary-first")) {
+        if (strcmp(p->copy_chord, "-")) {
+            plan.first_chord = p->copy_chord;
+            plan.first_timeout_ms = d->cfg.copy_timeout_ms;
+        }
+        return plan;
+    }
+
+    if (strcmp(d->cfg.safe_copy_chord, "-")) {
+        plan.first_chord = d->cfg.safe_copy_chord;
+        plan.first_timeout_ms = d->cfg.safe_probe_timeout_ms;
+    }
+
+    if (strcmp(p->copy_chord, "-") &&
+        (!plan.first_chord || strcasecmp(plan.first_chord, p->copy_chord))) {
+        if (!plan.first_chord) {
+            plan.first_chord = p->copy_chord;
+            plan.first_timeout_ms = d->cfg.copy_timeout_ms;
+        } else {
+            plan.fallback_chord = p->copy_chord;
+        }
+    }
+    return plan;
+}
+
 static int restore_if_still_ours(struct daemon_state *d, enum sel_kind kind,
                                  const struct item *original, bool *preserved_newer);
 
@@ -1413,16 +1451,25 @@ static int command_grab(struct daemon_state *d, const char *reg, uint64_t receiv
     }
 
     uint64_t focus_generation = d->active_app_generation;
-    uint64_t before = d->clipboard_generation;
-    operation_phase(d, "grab-safe-copy");
-    r = inject_chord(d, d->cfg.safe_copy_chord);
-    if (r == 0) r = wait_external_generation(d, SEL_CLIPBOARD, before, d->cfg.safe_probe_timeout_ms);
+    struct grab_copy_plan copy_plan = grab_copy_plan_for_profile(d, p);
+    if (!copy_plan.first_chord) {
+        r = -ENOTSUP;
+    } else {
+        uint64_t before = d->clipboard_generation;
+        operation_phase(d, !strcasecmp(copy_plan.first_chord, d->cfg.safe_copy_chord)
+            ? "grab-safe-copy" : "grab-profile-copy");
+        r = inject_chord(d, copy_plan.first_chord);
+        if (r == 0)
+            r = wait_external_generation(d, SEL_CLIPBOARD, before, copy_plan.first_timeout_ms);
 
-    if (r < 0 && d->active_app_generation == focus_generation && strcmp(p->copy_chord, "-")) {
-        operation_phase(d, "grab-profile-copy");
-        before = d->clipboard_generation;
-        r = inject_chord(d, p->copy_chord);
-        if (r == 0) r = wait_external_generation(d, SEL_CLIPBOARD, before, d->cfg.copy_timeout_ms);
+        if (r < 0 && copy_plan.fallback_chord &&
+            d->active_app_generation == focus_generation) {
+            operation_phase(d, "grab-profile-copy");
+            before = d->clipboard_generation;
+            r = inject_chord(d, copy_plan.fallback_chord);
+            if (r == 0)
+                r = wait_external_generation(d, SEL_CLIPBOARD, before, d->cfg.copy_timeout_ms);
+        }
     }
 
     if (r < 0 || d->active_app_generation != focus_generation) {
