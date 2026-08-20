@@ -165,6 +165,13 @@ struct daemon_state {
     bool restart_requested;
     bool in_transaction;
     bool copyq_was_monitoring;
+
+    uint64_t operation_sequence;
+    uint64_t operation_id;
+    uint64_t operation_started_ms;
+    char operation_name[16];
+    char operation_register[MAX_REGISTER_NAME + 1];
+    char operation_phase[48];
 };
 
 static struct daemon_state *G;
@@ -198,6 +205,39 @@ static void logmsg(const char *fmt, ...) {
     vfprintf(stderr, fmt, ap);
     fputc('\n', stderr);
     va_end(ap);
+}
+
+static void operation_begin(struct daemon_state *d, const char *name, const char *reg) {
+    d->operation_id = ++d->operation_sequence;
+    d->operation_started_ms = now_ms();
+    snprintf(d->operation_name, sizeof(d->operation_name), "%s", name ? name : "unknown");
+    snprintf(d->operation_register, sizeof(d->operation_register), "%s", reg ? reg : "-");
+    snprintf(d->operation_phase, sizeof(d->operation_phase), "accepted");
+    logmsg("op=%llu command=%s register=%s phase=%s app=%s",
+           (unsigned long long)d->operation_id, d->operation_name, d->operation_register,
+           d->operation_phase, d->active_app[0] ? d->active_app : "unknown");
+}
+
+static void operation_phase(struct daemon_state *d, const char *phase) {
+    if (!d->operation_id) return;
+    snprintf(d->operation_phase, sizeof(d->operation_phase), "%s", phase ? phase : "unknown");
+    logmsg("op=%llu command=%s register=%s phase=%s",
+           (unsigned long long)d->operation_id, d->operation_name, d->operation_register,
+           d->operation_phase);
+}
+
+static void operation_finish(struct daemon_state *d, int result) {
+    if (!d->operation_id) return;
+    uint64_t duration = now_ms() - d->operation_started_ms;
+    logmsg("op=%llu command=%s register=%s phase=complete status=%s code=%d duration_ms=%llu",
+           (unsigned long long)d->operation_id, d->operation_name, d->operation_register,
+           result < 0 ? "error" : "ok", result < 0 ? -result : 0,
+           (unsigned long long)duration);
+    d->operation_id = 0;
+    d->operation_started_ms = 0;
+    d->operation_name[0] = '\0';
+    d->operation_register[0] = '\0';
+    d->operation_phase[0] = '\0';
 }
 
 static int path_suffix(char *out, size_t cap, const char *base, const char *suffix) {
@@ -698,12 +738,30 @@ static int drain_wayland(struct daemon_state *d);
 
 static int stable_snapshot_current(struct daemon_state *d, enum sel_kind kind, struct item *out,
                                    bool *present, uint64_t *generation) {
+    operation_phase(d, kind == SEL_CLIPBOARD ? "snapshot-clipboard-drain-before"
+                                              : "snapshot-primary-drain-before");
     int r = drain_wayland(d); /* prototype below; declared before use by compiler via declaration */
     if (r < 0) return r;
     uint64_t g = kind == SEL_CLIPBOARD ? d->clipboard_generation : d->primary_generation;
     struct offer_state *o = kind == SEL_CLIPBOARD ? d->clipboard_offer : d->primary_offer;
-    bool p = o != NULL;
-    r = snapshot_offer(d, o, out); if (r < 0) return r;
+    struct source_state *owned = kind == SEL_CLIPBOARD
+        ? d->active_clipboard_source : d->active_primary_source;
+    bool owned_current = owned && !owned->cancelled;
+    bool p = owned_current || o != NULL;
+
+    /* snapshot_current() is the self-ownership boundary. When ClipReg restored
+     * a selection after the previous transaction, asking Wayland to pipe that
+     * selection back to the same single-threaded daemon would wait forever for
+     * source_send() to run on the event loop we just blocked. Clone held MIME
+     * data instead; the generation checks below still reject concurrent change. */
+    operation_phase(d, owned_current
+        ? (kind == SEL_CLIPBOARD ? "snapshot-clipboard-clone-owned" : "snapshot-primary-clone-owned")
+        : (kind == SEL_CLIPBOARD ? "snapshot-clipboard-receive-offer" : "snapshot-primary-receive-offer"));
+    r = snapshot_current(d, kind, out);
+    if (r < 0) return r;
+
+    operation_phase(d, kind == SEL_CLIPBOARD ? "snapshot-clipboard-drain-after"
+                                              : "snapshot-primary-drain-after");
     r = drain_wayland(d); if (r < 0) { item_free(out); return r; }
     uint64_t after = kind == SEL_CLIPBOARD ? d->clipboard_generation : d->primary_generation;
     if (after != g) { item_free(out); return -EAGAIN; }
@@ -1165,6 +1223,7 @@ static void recovery_clear(struct daemon_state *d) {
 static int transaction_prepare(struct daemon_state *d, enum recovery_kind kind,
                                const struct item *clip, bool clip_present,
                                const struct item *pri, bool primary_present, bool primary_supported) {
+    operation_phase(d, "transaction-prepare");
     if (d->in_transaction) return -EBUSY;
     struct recovery_state st = {
         .kind = kind, .started_realtime_ms = realtime_ms(),
@@ -1181,6 +1240,7 @@ static int transaction_prepare(struct daemon_state *d, enum recovery_kind kind,
     d->copyq_was_monitoring = st.copyq_was_monitoring;
     if (d->copyq_was_monitoring) copyq_set(false);
     d->in_transaction = true;
+    operation_phase(d, "transaction-active");
     return 0;
 fail:
     recovery_clear(d);
@@ -1188,11 +1248,13 @@ fail:
 }
 
 static void transaction_finish(struct daemon_state *d) {
+    operation_phase(d, "transaction-finish");
     if (d->copyq_was_monitoring) copyq_set(true);
     d->copyq_was_monitoring = false; d->in_transaction = false; recovery_clear(d);
 }
 
 static void transaction_leave_recovery(struct daemon_state *d) {
+    operation_phase(d, "transaction-leave-recovery");
     if (d->copyq_was_monitoring) copyq_set(true);
     d->copyq_was_monitoring = false; d->in_transaction = false;
     /* Keep recovery files and force systemd to restart us so startup recovery retries. */
@@ -1300,6 +1362,7 @@ static int command_save(struct daemon_state *d, const char *reg, enum sel_kind k
 static int command_grab(struct daemon_state *d, const char *reg, uint64_t received,
                         char *reply, size_t rcap) {
     if (!valid_register_name(reg)) return -EINVAL;
+    operation_phase(d, "grab-drain-initial");
     int r = drain_wayland(d); if (r < 0) return r;
     const struct app_profile *p = profile_for(d, d->active_app); if (!p) return -ENOENT;
 
@@ -1320,6 +1383,7 @@ static int command_grab(struct daemon_state *d, const char *reg, uint64_t receiv
     }
 
     struct item original; bool original_present = false; uint64_t original_gen = 0;
+    operation_phase(d, "grab-snapshot-clipboard");
     r = stable_snapshot_current(d, SEL_CLIPBOARD, &original, &original_present, &original_gen);
     if (r < 0) return r;
     r = transaction_prepare(d, RECOVERY_GRAB, &original, original_present, NULL, false, false);
@@ -1338,6 +1402,7 @@ static int command_grab(struct daemon_state *d, const char *reg, uint64_t receiv
      * the transaction, so the sentinel never becomes history noise.
      */
     struct item sentinel; item_init(&sentinel);
+    operation_phase(d, "grab-stage-sentinel");
     uint64_t sentinel_before = d->clipboard_generation;
     struct source_state *sentinel_source = publish_item(d, SEL_CLIPBOARD, &sentinel, true);
     if (!sentinel_source) { transaction_finish(d); item_free(&original); return -ENOMEM; }
@@ -1349,10 +1414,12 @@ static int command_grab(struct daemon_state *d, const char *reg, uint64_t receiv
 
     uint64_t focus_generation = d->active_app_generation;
     uint64_t before = d->clipboard_generation;
+    operation_phase(d, "grab-safe-copy");
     r = inject_chord(d, d->cfg.safe_copy_chord);
     if (r == 0) r = wait_external_generation(d, SEL_CLIPBOARD, before, d->cfg.safe_probe_timeout_ms);
 
     if (r < 0 && d->active_app_generation == focus_generation && strcmp(p->copy_chord, "-")) {
+        operation_phase(d, "grab-profile-copy");
         before = d->clipboard_generation;
         r = inject_chord(d, p->copy_chord);
         if (r == 0) r = wait_external_generation(d, SEL_CLIPBOARD, before, d->cfg.copy_timeout_ms);
@@ -1369,6 +1436,7 @@ static int command_grab(struct daemon_state *d, const char *reg, uint64_t receiv
 
     uint64_t copied_gen = d->clipboard_generation;
     struct item copied, content;
+    operation_phase(d, "grab-capture-result");
     r = snapshot_current(d, SEL_CLIPBOARD, &copied);
     if (r < 0) {
         bool newer = false; (void)restore_if_still_ours(d, SEL_CLIPBOARD, &original, &newer);
@@ -1381,6 +1449,7 @@ static int command_grab(struct daemon_state *d, const char *reg, uint64_t receiv
     }
     if (copied.count == 0 || is_secret_item(&copied)) {
         bool secret = copied.count && is_secret_item(&copied); item_free(&copied);
+        operation_phase(d, "grab-restore");
         int rr = restore_selection(d, SEL_CLIPBOARD, &original); item_free(&original);
         if (rr < 0) { transaction_leave_recovery(d); return rr; }
         transaction_finish(d); return secret ? -EPERM : -ENODATA;
@@ -1431,11 +1500,14 @@ static int command_paste(struct daemon_state *d, const char *reg, uint64_t recei
     if (!valid_register_name(reg)) return -EINVAL;
     struct item regitem, orig_clip, orig_pri; bool clip_present = false, pri_present = false;
     uint64_t clip_gen = 0, pri_gen = 0;
+    operation_phase(d, "paste-load-register");
     int r = load_register_file(d, reg, &regitem); if (r < 0) return r;
+    operation_phase(d, "paste-snapshot-clipboard");
     r = stable_snapshot_current(d, SEL_CLIPBOARD, &orig_clip, &clip_present, &clip_gen);
     if (r < 0) { item_free(&regitem); return r; }
     item_init(&orig_pri);
     if (d->cfg.stage_primary_for_paste && d->primary_supported) {
+        operation_phase(d, "paste-snapshot-primary");
         r = stable_snapshot_current(d, SEL_PRIMARY, &orig_pri, &pri_present, &pri_gen);
         if (r < 0) { item_free(&regitem); item_free(&orig_clip); return r; }
     }
@@ -1454,16 +1526,19 @@ static int command_paste(struct daemon_state *d, const char *reg, uint64_t recei
     }
 
     uint64_t gc = d->clipboard_generation, gp = d->primary_generation;
+    operation_phase(d, "paste-stage-clipboard");
     struct source_state *sc = publish_item(d, SEL_CLIPBOARD, &regitem, true), *sp = NULL;
     if (!sc) { r = -ENOMEM; goto out_restore; }
     r = wait_marker_offer(d, SEL_CLIPBOARD, gc, 700); if (r < 0) goto out_restore;
     if (d->cfg.stage_primary_for_paste && d->primary_supported) {
+        operation_phase(d, "paste-stage-primary");
         sp = publish_item(d, SEL_PRIMARY, &regitem, true);
         if (!sp) { r = -ENOMEM; goto out_restore; }
         r = wait_marker_offer(d, SEL_PRIMARY, gp, 700); if (r < 0) goto out_restore;
     }
 
     /* Let clipboard watchers make immediate reads, then establish the request baseline. */
+    operation_phase(d, "paste-drain-watchers");
     (void)wait_source_quiet(d, sc, d->cfg.request_quiet_ms, 600);
     if (sp) (void)wait_source_quiet(d, sp, d->cfg.request_quiet_ms, 600);
     hotkey_release_guard(d, received);
@@ -1476,8 +1551,10 @@ static int command_paste(struct daemon_state *d, const char *reg, uint64_t recei
     if (!strcmp(p->paste_chord, "-") && (!d->cfg.stage_primary_for_paste || !d->primary_supported)) {
         r = -ENOTSUP;
     } else {
+        operation_phase(d, "paste-inject");
         r = inject_chord(d, paste_chord);
         if (r == 0) {
+            operation_phase(d, "paste-wait-consumer");
             uint64_t deadline = now_ms() + (uint64_t)d->cfg.paste_timeout_ms;
             while (now_ms() < deadline && sc->send_count == bc && (!sp || sp->send_count == bp)) {
                 int dr = dispatch_once(d, (int)(deadline - now_ms())); if (dr < 0) { r = dr; break; }
@@ -1486,12 +1563,14 @@ static int command_paste(struct daemon_state *d, const char *reg, uint64_t recei
         }
     }
     if (r == 0) {
+        operation_phase(d, "paste-transfer-quiescence");
         (void)wait_source_quiet(d, sc, d->cfg.request_quiet_ms, d->cfg.transfer_timeout_ms);
         if (sp) (void)wait_source_quiet(d, sp, d->cfg.request_quiet_ms, d->cfg.transfer_timeout_ms);
         if (sc->send_fail_count != fc || (sp && sp->send_fail_count != fp)) r = -EIO;
     }
 
 out_restore:;
+    operation_phase(d, "paste-restore");
     bool newer_clip = false, newer_pri = false;
     int rc = restore_if_still_ours(d, SEL_CLIPBOARD, &orig_clip, &newer_clip);
     int rp = 0;
@@ -1644,7 +1723,49 @@ static int command_doctor(struct daemon_state*d,char*reply,size_t rcap){(void)sn
 
 static const char *err_name(int e){e=-e;switch(e){case ENODATA:return "no selectable/clipboard content";case EPERM:return "content is marked secret and was not stored";case ETIMEDOUT:return "target application did not complete the clipboard operation";case EINVAL:return "invalid argument/configuration";case ENOENT:return "register or resource not found";case ENOTSUP:return "required compositor/input capability unavailable";case EAGAIN:return "clipboard changed concurrently; operation aborted";case EFBIG:return "clipboard content exceeds configured size limit";default:return strerror(e);}}
 
-static int handle_command(struct daemon_state*d,const char*line,char*reply,size_t rcap){char buf[512];snprintf(buf,sizeof(buf),"%s",line);char*save=NULL;char*cmd=strtok_r(buf," \t\r\n",&save);char*arg=strtok_r(NULL," \t\r\n",&save);if(!cmd)return -EINVAL;uint64_t received=now_ms();if(!strcmp(cmd,"save")){if(!arg)return -EINVAL;return command_save(d,arg,SEL_CLIPBOARD,3,reply,rcap);}if(!strcmp(cmd,"primary")){if(!arg)return -EINVAL;return command_save(d,arg,SEL_PRIMARY,4,reply,rcap);}if(!strcmp(cmd,"grab")){if(!arg)return -EINVAL;return command_grab(d,arg,received,reply,rcap);}if(!strcmp(cmd,"paste")){if(!arg)return -EINVAL;return command_paste(d,arg,received,reply,rcap);}if(!strcmp(cmd,"copy")){if(!arg)return -EINVAL;return command_copy(d,arg,reply,rcap);}if(!strcmp(cmd,"clear")){if(!arg)return -EINVAL;return command_clear(d,arg,reply,rcap);}if(!strcmp(cmd,"show")){if(!arg)return -EINVAL;return command_show(d,arg,reply,rcap);}if(!strcmp(cmd,"list"))return command_list(d,reply,rcap);if(!strcmp(cmd,"app"))return command_app(d,reply,rcap);if(!strcmp(cmd,"doctor"))return command_doctor(d,reply,rcap);if(!strcmp(cmd,"reload")){load_config_file(d);load_profiles(d);snprintf(reply,rcap,"configuration reloaded");return 0;}return -EINVAL;}
+static int handle_command(struct daemon_state *d, const char *line, char *reply, size_t rcap) {
+    char buf[512];
+    snprintf(buf, sizeof(buf), "%s", line);
+    char *save = NULL;
+    char *cmd = strtok_r(buf, " \t\r\n", &save);
+    char *arg = strtok_r(NULL, " \t\r\n", &save);
+    if (!cmd) return -EINVAL;
+
+    bool traced = !strcmp(cmd, "grab") || !strcmp(cmd, "paste");
+    if (traced) operation_begin(d, cmd, arg);
+
+    uint64_t received = now_ms();
+    int r = -EINVAL;
+    if (!strcmp(cmd, "save")) {
+        if (arg) r = command_save(d, arg, SEL_CLIPBOARD, 3, reply, rcap);
+    } else if (!strcmp(cmd, "primary")) {
+        if (arg) r = command_save(d, arg, SEL_PRIMARY, 4, reply, rcap);
+    } else if (!strcmp(cmd, "grab")) {
+        if (arg) r = command_grab(d, arg, received, reply, rcap);
+    } else if (!strcmp(cmd, "paste")) {
+        if (arg) r = command_paste(d, arg, received, reply, rcap);
+    } else if (!strcmp(cmd, "copy")) {
+        if (arg) r = command_copy(d, arg, reply, rcap);
+    } else if (!strcmp(cmd, "clear")) {
+        if (arg) r = command_clear(d, arg, reply, rcap);
+    } else if (!strcmp(cmd, "show")) {
+        if (arg) r = command_show(d, arg, reply, rcap);
+    } else if (!strcmp(cmd, "list")) {
+        r = command_list(d, reply, rcap);
+    } else if (!strcmp(cmd, "app")) {
+        r = command_app(d, reply, rcap);
+    } else if (!strcmp(cmd, "doctor")) {
+        r = command_doctor(d, reply, rcap);
+    } else if (!strcmp(cmd, "reload")) {
+        load_config_file(d);
+        load_profiles(d);
+        snprintf(reply, rcap, "configuration reloaded");
+        r = 0;
+    }
+
+    if (traced) operation_finish(d, r);
+    return r;
+}
 
 static void prune_sources(struct daemon_state *d) {
     if (d->in_transaction) return;
