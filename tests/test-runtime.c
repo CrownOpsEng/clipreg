@@ -9,7 +9,37 @@ static int fail(const char *message) {
     return 1;
 }
 
+static int test_grab_copy_policy(void) {
+    struct daemon_state d = {0};
+    default_config(&d.cfg);
+
+    struct app_profile p = {0};
+    snprintf(p.copy_chord, sizeof(p.copy_chord), "CTRL+SHIFT+C");
+
+    snprintf(p.grab_strategy, sizeof(p.grab_strategy), "primary-first");
+    struct grab_copy_plan plan = grab_copy_plan_for_profile(&d, &p);
+    if (!plan.first_chord || strcmp(plan.first_chord, "CTRL+SHIFT+C") ||
+        plan.fallback_chord != NULL || plan.first_timeout_ms != d.cfg.copy_timeout_ms)
+        return fail("primary-first routed through the generic Copy probe");
+
+    snprintf(p.grab_strategy, sizeof(p.grab_strategy), "copy");
+    plan = grab_copy_plan_for_profile(&d, &p);
+    if (!plan.first_chord || strcmp(plan.first_chord, d.cfg.safe_copy_chord) ||
+        !plan.fallback_chord || strcmp(plan.fallback_chord, "CTRL+SHIFT+C") ||
+        plan.first_timeout_ms != d.cfg.safe_probe_timeout_ms)
+        return fail("ordinary copy strategy lost safe-probe then fallback ordering");
+
+    snprintf(p.grab_strategy, sizeof(p.grab_strategy), "primary-only");
+    plan = grab_copy_plan_for_profile(&d, &p);
+    if (plan.first_chord || plan.fallback_chord)
+        return fail("primary-only unexpectedly planned injected Copy input");
+
+    return 0;
+}
+
 int main(void) {
+    if (test_grab_copy_policy() != 0) return 1;
+
     struct daemon_state d = {0};
     default_config(&d.cfg);
     d.display = (struct wl_display *)(uintptr_t)1;
