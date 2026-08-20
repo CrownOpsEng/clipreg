@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-only
 CC ?= cc
 PKG_CONFIG ?= pkg-config
 SCANNER ?= wayland-scanner
@@ -5,9 +6,12 @@ CFLAGS ?= -O2 -g
 CPPFLAGS ?=
 LDFLAGS ?=
 
-# Treat warnings in our own engine as build failures. Generated Wayland protocol
-# code is compiled separately because warning behavior can vary with scanner/compiler
-# versions even when the generated ABI is correct.
+VERSION_BASE := $(shell ./scripts/version.sh --base)
+VERSION_FULL := $(shell ./scripts/version.sh --full)
+CPPFLAGS += -DCLIPREG_VERSION=\"$(VERSION_FULL)\"
+
+# Warnings in project-owned C are build failures. Scanner-generated code is
+# compiled separately because warning output can vary by scanner/compiler.
 CLIPREG_WARN = -Wall -Wextra -Wpedantic -Wshadow -Wformat=2 -Wconversion -Werror
 PROTO_WARN = -Wall -Wextra
 PKG_CFLAGS := $(shell $(PKG_CONFIG) --cflags wayland-client 2>/dev/null)
@@ -28,9 +32,17 @@ PROTO_OBJS := \
 	$(BUILD)/ext-data-control-v1-protocol.o \
 	$(BUILD)/cosmic-toplevel-info-unstable-v1-protocol.o
 
-all: $(BUILD)/clipreg
+.DEFAULT_GOAL := help
 
-check-deps:
+help: ## Show the supported operator/developer command surface.
+	@awk 'BEGIN {FS=":.*## "} /^[a-zA-Z0-9_.-]+:.*## / {printf "  %-16s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+
+version: ## Print the exact build version.
+	@./scripts/version.sh --full
+
+build: $(BUILD)/clipreg ## Build ClipReg against the installed Wayland client ABI.
+
+check-deps: ## Verify native build dependencies without modifying the machine.
 	@command -v $(PKG_CONFIG) >/dev/null || { echo "Missing pkg-config" >&2; exit 1; }
 	@$(PKG_CONFIG) --exists wayland-client || { echo "Missing wayland-client development files" >&2; exit 1; }
 	@command -v $(SCANNER) >/dev/null || { echo "Missing wayland-scanner" >&2; exit 1; }
@@ -38,6 +50,22 @@ check-deps:
 check-protocols: check-deps
 	@test -f "$(EXT_XML)" || { echo "Missing bundled ext-data-control v1 protocol" >&2; exit 1; }
 	@test -f "$(COSMIC_XML)" || { echo "Missing bundled COSMIC toplevel v1 protocol" >&2; exit 1; }
+
+check-fast: ## Run the containerless/offline repository regression suite.
+	@./test.sh
+
+selftest: build ## Run the native binary self-test.
+	@$(BUILD)/clipreg --selftest
+
+check-native: clean selftest ## Build with real wayland-scanner/libwayland and run self-test.
+
+check: check-fast check-native ## Canonical CI/local validation.
+
+install: ## Install/reconcile this source tree using the deployment planner.
+	@./deploy.sh
+
+package: ## Build a deterministic source archive under dist/.
+	@./scripts/package.sh
 
 $(BUILD) $(GEN):
 	mkdir -p $@
@@ -66,12 +94,7 @@ $(BUILD)/cosmic-toplevel-info-unstable-v1-protocol.o: $(GEN)/cosmic-toplevel-inf
 $(BUILD)/clipreg: check-protocols $(BUILD)/clipreg.o $(PROTO_OBJS)
 	$(CC) $(LDFLAGS) $(BUILD)/clipreg.o $(PROTO_OBJS) $(PKG_LIBS) -o "$@"
 
-selftest: $(BUILD)/clipreg
-	$(BUILD)/clipreg --selftest
+clean: ## Remove generated build output.
+	rm -rf $(BUILD) dist
 
-check: selftest
-
-clean:
-	rm -rf $(BUILD)
-
-.PHONY: all clean check check-deps check-protocols selftest
+.PHONY: help version build check-deps check-protocols check-fast selftest check-native check install package clean

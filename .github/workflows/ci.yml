@@ -1,26 +1,44 @@
 name: CI
+run-name: >-
+  ${{ github.event_name == 'pull_request'
+      && format('PR #{0} | {1}', github.event.pull_request.number, github.event.pull_request.title)
+      || github.event_name == 'push'
+      && 'main | post-merge verification'
+      || format('Manual | {0}', github.ref_name) }}
 
 on:
-  push:
   pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  offline:
+  check:
+    name: Check
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - name: Install test prerequisites
-        run: sudo apt-get update && sudo apt-get install -y build-essential python3
-      - name: Run offline suite
-        run: ./test.sh
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
 
-  wayland-build:
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install Wayland build dependencies
+      - name: Install native build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential pkg-config libwayland-dev libwayland-bin
-      - name: Generate protocol bindings, build, and self-test
-        run: make clean selftest
+
+      - name: Canonical validation
+        run: make check
+
+      - name: Verify checks leave tracked state clean
+        run: git diff --exit-code && test -z "$(git status --porcelain --untracked-files=no)"

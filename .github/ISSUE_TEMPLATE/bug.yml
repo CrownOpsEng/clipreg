@@ -1,0 +1,62 @@
+name: Bug report
+description: Report a reproducible ClipReg defect or reliability failure.
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not paste passwords, secret clipboard payloads, tokens, private file contents, or other sensitive data into a public issue.
+  - type: input
+    id: version
+    attributes:
+      label: ClipReg version
+      description: Output of `clipreg --version`.
+      placeholder: 0.2.0-beta.1+g...
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: Pop!_OS/COSMIC version and whether the affected app is native Wayland or XWayland if known.
+    validations:
+      required: true
+  - type: input
+    id: app
+    attributes:
+      label: Affected application
+      description: App name/version and the ClipReg operation (`grab`, `paste`, etc.).
+    validations:
+      required: true
+  - type: textarea
+    id: observed
+    attributes:
+      label: Observed behavior
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction
+      description: Minimal steps, including whether repetition is required and whether restarting `clipreg.service` recovers.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior / invariant
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics
+      description: Redact sensitive data. Useful commands include `clipreg doctor`, `systemctl --user show clipreg.service -p ActiveState -p SubState -p NRestarts -p ExecMainCode -p ExecMainStatus`, and `journalctl --user -u clipreg.service -b -n 150 --no-pager`.
+  - type: checkboxes
+    id: secret
+    attributes:
+      label: Safety check
+      options:
+        - label: I removed secret/private clipboard contents and credentials from this report.
+          required: true

@@ -34,7 +34,9 @@
 #include <time.h>
 #include <unistd.h>
 
-#define CLIPREG_VERSION "0.2.0-dev.2"
+#ifndef CLIPREG_VERSION
+#define CLIPREG_VERSION "0.0.0-dev"
+#endif
 #define MAGIC "CLPRG002"
 #define MAGIC_LEN 8
 #define OWNER_MIME "application/x-crownops-clipreg-owner"

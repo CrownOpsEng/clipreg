@@ -2,6 +2,7 @@
 set -euo pipefail
 
 BIN="${CLIPREG_TEST_BINARY:?set CLIPREG_TEST_BINARY to the compiled test binary}"
+EXPECTED_VERSION="${CLIPREG_TEST_VERSION:?set CLIPREG_TEST_VERSION}"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 mkdir -p "$TMP/bin"
@@ -25,7 +26,7 @@ chmod +x "$TMP/bin/systemctl"
 export CLIPREG_TEST_SYSTEMCTL_LOG="$LOG"
 export PATH="$TMP/bin:/usr/bin:/bin"
 
-[[ "$($BIN --version)" == "0.2.0-dev.2" ]]
+[[ "$($BIN --version)" == "$EXPECTED_VERSION" ]]
 "$BIN" autostart on > "$TMP/on"
 grep -q 'autostart: on' "$TMP/on"
 grep -q '^--user enable --now clipreg.service$' "$LOG"

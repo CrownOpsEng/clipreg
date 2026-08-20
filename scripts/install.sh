@@ -35,9 +35,8 @@ while (($#)); do
   shift
 done
 
-VERSION="$(tr -d '[:space:]' < "$ROOT/VERSION")"
-[[ "$VERSION" =~ ^0\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]] || { echo "ERROR: invalid VERSION: $VERSION" >&2; exit 1; }
-
+VERSION_BASE="$($ROOT/scripts/version.sh --base)"
+EXPECTED_BUILD_VERSION="$($ROOT/scripts/version.sh --full)"
 BIN_DIR="$HOME/.local/bin"
 BIN="$BIN_DIR/clipreg"
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/clipreg"
@@ -48,7 +47,7 @@ SERVICE_PATH="$USER_SYSTEMD/clipreg.service"
 source_fingerprint() {
   (
     cd "$ROOT"
-    LC_ALL=C find VERSION Makefile src protocol -type f -print0 \
+    LC_ALL=C find VERSION Makefile src protocol scripts/version.sh -type f -print0 \
       | LC_ALL=C sort -z \
       | xargs -0 sha256sum
   ) | sha256sum | awk '{print $1}'
@@ -67,7 +66,8 @@ write_build_state() {
   tmp="$(mktemp "$STATE_DIR/.build-state.XXXXXX")"
   trap 'rm -f "${tmp:-}"' RETURN
   {
-    printf 'version=%s\n' "$VERSION"
+    printf 'version_base=%s\n' "$VERSION_BASE"
+    printf 'build_version=%s\n' "$EXPECTED_BUILD_VERSION"
     printf 'source_sha256=%s\n' "$source_hash"
     printf 'binary_sha256=%s\n' "$binary_hash"
   } > "$tmp"
@@ -89,7 +89,8 @@ INSTALLED_VERSION=""
 INSTALLED_HASH=""
 [[ -x "$BIN" ]] && INSTALLED_VERSION="$($BIN --version 2>/dev/null || true)"
 [[ -x "$BIN" ]] && INSTALLED_HASH="$(sha256sum "$BIN" | awk '{print $1}')"
-STATE_VERSION="$(read_state_value version)"
+STATE_VERSION_BASE="$(read_state_value version_base)"
+STATE_BUILD_VERSION="$(read_state_value build_version)"
 STATE_SOURCE_HASH="$(read_state_value source_sha256)"
 STATE_BINARY_HASH="$(read_state_value binary_sha256)"
 
@@ -99,18 +100,19 @@ REBUILD_REASONS=()
 if [[ ! -x "$BIN" ]]; then
   REBUILD=1; REBUILD_REASONS+=(binary-missing)
 else
-  [[ "$INSTALLED_VERSION" == "$VERSION" ]] || { REBUILD=1; REBUILD_REASONS+=(version-mismatch); }
-  [[ "$STATE_VERSION" == "$VERSION" ]] || { REBUILD=1; REBUILD_REASONS+=(state-version-mismatch); }
+  [[ "$INSTALLED_VERSION" == "$EXPECTED_BUILD_VERSION" ]] || { REBUILD=1; REBUILD_REASONS+=(build-version-mismatch); }
+  [[ "$STATE_VERSION_BASE" == "$VERSION_BASE" ]] || { REBUILD=1; REBUILD_REASONS+=(state-version-mismatch); }
+  [[ "$STATE_BUILD_VERSION" == "$EXPECTED_BUILD_VERSION" ]] || { REBUILD=1; REBUILD_REASONS+=(state-build-version-mismatch); }
   [[ "$STATE_SOURCE_HASH" == "$SOURCE_HASH" ]] || { REBUILD=1; REBUILD_REASONS+=(source-mismatch); }
   [[ -n "$INSTALLED_HASH" && "$STATE_BINARY_HASH" == "$INSTALLED_HASH" ]] || { REBUILD=1; REBUILD_REASONS+=(binary-hash-mismatch); }
 fi
 
 if ((PLAN_ONLY)); then
   if ((REBUILD)); then
-    printf 'rebuild=yes\nversion=%s\nsource_sha256=%s\nreasons=%s\n' \
-      "$VERSION" "$SOURCE_HASH" "$(IFS=,; echo "${REBUILD_REASONS[*]}")"
+    printf 'rebuild=yes\nversion_base=%s\nbuild_version=%s\nsource_sha256=%s\nreasons=%s\n' \
+      "$VERSION_BASE" "$EXPECTED_BUILD_VERSION" "$SOURCE_HASH" "$(IFS=,; echo "${REBUILD_REASONS[*]}")"
   else
-    printf 'rebuild=no\nversion=%s\nsource_sha256=%s\n' "$VERSION" "$SOURCE_HASH"
+    printf 'rebuild=no\nversion_base=%s\nbuild_version=%s\nsource_sha256=%s\n' "$VERSION_BASE" "$EXPECTED_BUILD_VERSION" "$SOURCE_HASH"
   fi
   exit 0
 fi
@@ -135,7 +137,7 @@ if ((REBUILD)); then
     sudo apt-get install -y "${need_build[@]}"
   fi
 
-  echo "[BUILD] ClipReg $VERSION (source $SOURCE_HASH)"
+  echo "[BUILD] ClipReg $EXPECTED_BUILD_VERSION (source $SOURCE_HASH)"
   make -C "$ROOT" clean selftest
 
   install -d "$BIN_DIR"
@@ -149,7 +151,7 @@ if ((REBUILD)); then
   INSTALLED_HASH="$(sha256sum "$BIN" | awk '{print $1}')"
   write_build_state "$SOURCE_HASH" "$INSTALLED_HASH"
 else
-  echo "[REUSE] ClipReg $VERSION binary matches source/install fingerprint"
+  echo "[REUSE] ClipReg $EXPECTED_BUILD_VERSION binary matches source/install fingerprint"
 fi
 
 # v0.1.0 stored registers in CopyQ. Migration is read-only, idempotent, and

@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+VERSION_BASE="$($ROOT/scripts/version.sh --base)"
+BUILD_VERSION="$($ROOT/scripts/version.sh --full)"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 export HOME="$TMP/home"
@@ -17,15 +19,18 @@ grep -q 'binary-missing' <<<"$out"
 # the planner and seed an exactly matching build state.
 cat > "$HOME/.local/bin/clipreg" <<'BIN'
 #!/usr/bin/env bash
-[[ "${1:-}" == "--version" ]] && { echo 0.2.0-dev.2; exit 0; }
+[[ "${1:-}" == "--version" ]] && { echo __BUILD_VERSION__; exit 0; }
 exit 1
 BIN
+# Substitute after the heredoc so SemVer punctuation remains literal shell data.
+sed -i "s/__BUILD_VERSION__/$BUILD_VERSION/g" "$HOME/.local/bin/clipreg"
 chmod +x "$HOME/.local/bin/clipreg"
 out="$($ROOT/scripts/install.sh --plan)"
 source_hash="$(awk -F= '$1=="source_sha256"{print $2}' <<<"$out")"
 binary_hash="$(sha256sum "$HOME/.local/bin/clipreg" | awk '{print $1}')"
 cat > "$XDG_STATE_HOME/clipreg/build-state" <<STATE
-version=0.2.0-dev.2
+version_base=$VERSION_BASE
+build_version=$BUILD_VERSION
 source_sha256=$source_hash
 binary_sha256=$binary_hash
 STATE

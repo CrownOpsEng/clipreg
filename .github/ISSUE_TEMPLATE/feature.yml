@@ -1,0 +1,27 @@
+name: Feature request
+description: Propose a concrete ClipReg capability or behavior improvement.
+title: "[feature] "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / use case
+      description: What observed need is not solved cleanly by the current primitives?
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Desired behavior
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Existing primitives / alternatives considered
+      description: Explain why current commands/config/keymaps/profiles are insufficient.
+  - type: textarea
+    id: constraints
+    attributes:
+      label: Constraints or compatibility concerns
