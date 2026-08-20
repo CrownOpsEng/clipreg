@@ -1,0 +1,8 @@
+*.log
+*.bak
+*.zip
+*.tar.gz
+__pycache__/
+*.pyc
+.env
+.env.*

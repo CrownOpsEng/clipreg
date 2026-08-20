@@ -1,0 +1,98 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: AGPL-3.0-only
+set -euo pipefail
+
+MODE="${1:-ask}"
+TARGET_FILE="$HOME/.config/cosmic/com.system76.CosmicSettings.Shortcuts/v1/custom"
+
+if [ "$MODE" = "ask" ]; then
+    echo "Clipboard register keybinding setup"
+    echo "1) Digits (requested): Super+Shift+0..9 save; Ctrl+Shift+0..9 paste"
+    echo "   NOTE: Super+Shift+0..9 replaces COSMIC default move-window-to-workspace bindings."
+    echo "2) Function keys: Super+Shift+F1..F12 save; Ctrl+Shift+F1..F12 paste"
+    echo "3) Both"
+    echo "4) Remove clipboard-register bindings"
+    echo "5) Skip"
+    read -rp "Selection: " choice
+
+    case "$choice" in
+        1) MODE="digits" ;;
+        2) MODE="functions" ;;
+        3) MODE="both" ;;
+        4) MODE="remove" ;;
+        *) MODE="skip" ;;
+    esac
+fi
+
+case "$MODE" in
+    digits|functions|both|remove|skip) ;;
+    *) echo "ERROR: invalid mode '$MODE'" >&2; exit 2 ;;
+esac
+
+mkdir -p "$(dirname "$TARGET_FILE")"
+if [ ! -f "$TARGET_FILE" ]; then
+    printf "{\n}\n" > "$TARGET_FILE"
+fi
+
+python3 - "$TARGET_FILE" "$MODE" <<'PYTHON'
+from pathlib import Path
+import re
+import sys
+
+target = Path(sys.argv[1])
+mode = sys.argv[2]
+text = target.read_text()
+
+# Remove only the block owned by this feature.
+text = re.sub(
+    r'\n?\s*// CLIPREG-START.*?// CLIPREG-END\s*',
+    '\n',
+    text,
+    flags=re.S,
+)
+
+if mode == "skip":
+    target.write_text(text)
+    raise SystemExit(0)
+
+block = ""
+if mode != "remove":
+    block = "\n    // CLIPREG-START\n"
+
+    def add_binding(modifiers, key, command):
+        mods = "\n".join(f"            {m}," for m in modifiers)
+        return f'''    (\n        modifiers: [\n{mods}\n        ],\n        key: "{key}",\n    ): Spawn("{command}"),\n\n'''
+
+    if mode in {"digits", "both"}:
+        for key in ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]:
+            block += add_binding(
+                ["Super", "Shift"], key,
+                f"$HOME/.local/bin/clipreg save {key}",
+            )
+            block += add_binding(
+                ["Ctrl", "Shift"], key,
+                f"$HOME/.local/bin/clipreg paste {key}",
+            )
+
+    if mode in {"functions", "both"}:
+        for number in range(1, 13):
+            key = f"F{number}"
+            block += add_binding(
+                ["Super", "Shift"], key,
+                f"$HOME/.local/bin/clipreg save {key}",
+            )
+            block += add_binding(
+                ["Ctrl", "Shift"], key,
+                f"$HOME/.local/bin/clipreg paste {key}",
+            )
+
+    block += "    // CLIPREG-END\n"
+
+pos = text.rfind("}")
+if pos == -1:
+    raise RuntimeError("Could not find closing brace in COSMIC shortcut file.")
+
+new_text = text[:pos].rstrip() + "\n" + block + "\n}\n"
+target.write_text(new_text)
+print(f"Clipboard-register bindings updated: {mode}")
+PYTHON
