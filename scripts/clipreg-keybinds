@@ -3,96 +3,420 @@
 set -euo pipefail
 
 MODE="${1:-ask}"
-TARGET_FILE="$HOME/.config/cosmic/com.system76.CosmicSettings.Shortcuts/v1/custom"
+TARGET_FILE="${CLIPREG_COSMIC_SHORTCUT_FILE:-$HOME/.config/cosmic/com.system76.CosmicSettings.Shortcuts/v1/custom}"
+KEYMAP="${CLIPREG_KEYMAP:-${XDG_CONFIG_HOME:-$HOME/.config}/clipreg/keymap.toml}"
+PREF_FILE="${CLIPREG_KEYBIND_PREF:-${XDG_CONFIG_HOME:-$HOME/.config}/clipreg/keybind-mode}"
 
-if [ "$MODE" = "ask" ]; then
-    echo "Clipboard register keybinding setup"
-    echo "1) Digits (requested): Super+Shift+0..9 save; Ctrl+Shift+0..9 paste"
-    echo "   NOTE: Super+Shift+0..9 replaces COSMIC default move-window-to-workspace bindings."
-    echo "2) Function keys: Super+Shift+F1..F12 save; Ctrl+Shift+F1..F12 paste"
-    echo "3) Both"
-    echo "4) Remove clipboard-register bindings"
-    echo "5) Skip"
+usage() {
+    cat <<'USAGE'
+Usage: clipreg-keybinds.sh [MODE]
+
+Modes:
+  ask             Reapply the saved choice; prompt only when none exists (default).
+  choose          Force the interactive menu and replace the saved choice.
+  digits          Install the established 1..9,0 set.
+  functions       Install the established F1..F12 set.
+  both            Install digits + functions.
+  set:A[,B...]    Install one or more named sets from keymap.toml.
+  all             Install every enabled set (fails if selected sets collide).
+  list            List sets defined by the key map.
+  check           Validate key-map structure and each set without changing COSMIC.
+  remove          Remove only the CLIPREG-managed shortcut block and saved choice.
+  skip            Make no changes at all.
+
+Each binding may independently define grab/save/paste chords. Different sets may
+reuse the same physical chords so they can act as alternate presets; collisions
+are rejected only when colliding sets are selected together.
+
+Environment:
+  CLIPREG_KEYMAP                Override keymap.toml path.
+  CLIPREG_COSMIC_SHORTCUT_FILE Override COSMIC custom shortcut file (testing).
+  CLIPREG_KEYBIND_PREF         Override saved keybinding-mode path.
+USAGE
+}
+
+save_pref() {
+    local value="$1"
+    local dir tmp
+    dir="$(dirname "$PREF_FILE")"
+    install -d -m 700 "$dir"
+    tmp="$(mktemp "$dir/.keybind-mode.XXXXXX")"
+    printf '%s\n' "$value" > "$tmp"
+    chmod 600 "$tmp"
+    if ! mv -f "$tmp" "$PREF_FILE"; then
+        rm -f "$tmp"
+        return 1
+    fi
+}
+
+if [[ "$MODE" == "-h" || "$MODE" == "--help" || "$MODE" == "help" ]]; then
+    usage
+    exit 0
+fi
+
+if [[ "$MODE" == "ask" && -f "$PREF_FILE" ]]; then
+    saved_mode="$(tr -d '[:space:]' < "$PREF_FILE")"
+    case "$saved_mode" in
+        digits|functions|both|all|set:*)
+            MODE="$saved_mode"
+            echo "ClipReg keybindings: reapplying saved mode '$MODE'"
+            ;;
+        *)
+            echo "WARNING: ignoring invalid saved ClipReg keybinding mode: $saved_mode" >&2
+            ;;
+    esac
+fi
+
+# v1 stored no preference. Infer only its established digit/function choice.
+# A v2 block is identified by its grab commands and is never guessed from.
+if [[ "$MODE" == "ask" && ! -f "$PREF_FILE" && -f "$TARGET_FILE" ]]; then
+    inferred="$(python3 - "$TARGET_FILE" <<'PYMIGRATE'
+from pathlib import Path
+import re, sys
+text = Path(sys.argv[1]).read_text()
+m = re.search(r'// CLIPREG-START(.*?)// CLIPREG-END', text, re.S)
+if not m:
+    raise SystemExit(0)
+block = m.group(1)
+if re.search(r'clipreg(?:\s+--notify)?\s+grab\s+', block):
+    raise SystemExit(0)
+digits = bool(re.search(r'clipreg\s+save\s+[0-9](?:\s|"|$)', block))
+functions = bool(re.search(r'clipreg\s+save\s+F(?:[1-9]|1[0-2])(?:\s|"|$)', block, re.I))
+if digits and functions:
+    print('both')
+elif digits:
+    print('digits')
+elif functions:
+    print('functions')
+PYMIGRATE
+)"
+    if [[ -n "$inferred" ]]; then
+        MODE="$inferred"
+        save_pref "$MODE"
+        echo "ClipReg keybindings: migrated v1 binding choice -> '$MODE'"
+    fi
+fi
+
+[[ "$MODE" == "choose" ]] && MODE="ask"
+
+if [[ "$MODE" == "ask" ]]; then
+    echo "ClipReg keybinding setup"
+    echo "1) Digits: 1..9,0 (10 registers)"
+    echo "   Grab Super+Shift+N | Clipboard-save Super+Ctrl+Shift+N | Paste Ctrl+Shift+N"
+    echo "   NOTE: grab intentionally overrides COSMIC Super+Shift+0..9 move-window shortcuts."
+    echo "2) Function keys: F1..F12 (12 registers)"
+    echo "3) Both established sets"
+    echo "4) One or more custom sets from keymap.toml"
+    echo "5) All enabled sets"
+    echo "6) Validate key map only"
+    echo "7) Remove ClipReg bindings"
+    echo "8) Skip (leave current bindings untouched)"
     read -rp "Selection: " choice
-
     case "$choice" in
         1) MODE="digits" ;;
         2) MODE="functions" ;;
         3) MODE="both" ;;
-        4) MODE="remove" ;;
+        4)
+            [[ -f "$KEYMAP" ]] || { echo "ERROR: key map not found: $KEYMAP" >&2; exit 1; }
+            python3 - "$KEYMAP" <<'PYSETS'
+import sys, tomllib
+with open(sys.argv[1], 'rb') as f:
+    d=tomllib.load(f)
+sets=[]
+for b in d.get('binding', []):
+    s=b.get('set') if isinstance(b, dict) else None
+    if isinstance(s, str) and s not in sets:
+        sets.append(s)
+print('Available sets: ' + ', '.join(sets))
+PYSETS
+            read -rp "Set name(s), comma-separated: " names
+            names="${names//[[:space:]]/}"
+            [[ -n "$names" ]] || { echo "ERROR: set name cannot be empty" >&2; exit 2; }
+            MODE="set:$names"
+            ;;
+        5) MODE="all" ;;
+        6) MODE="check" ;;
+        7) MODE="remove" ;;
         *) MODE="skip" ;;
     esac
 fi
 
 case "$MODE" in
-    digits|functions|both|remove|skip) ;;
-    *) echo "ERROR: invalid mode '$MODE'" >&2; exit 2 ;;
+    digits|functions|both|all|list|check|remove|skip|set:*) ;;
+    *) echo "ERROR: invalid mode '$MODE'" >&2; usage >&2; exit 2 ;;
 esac
 
-mkdir -p "$(dirname "$TARGET_FILE")"
-if [ ! -f "$TARGET_FILE" ]; then
-    printf "{\n}\n" > "$TARGET_FILE"
+if [[ "$MODE" == "skip" ]]; then
+    echo "ClipReg bindings unchanged."
+    exit 0
 fi
 
-python3 - "$TARGET_FILE" "$MODE" <<'PYTHON'
+# Removal never depends on the key map. This ensures a bad custom keymap cannot
+# trap the user with bindings they cannot cleanly remove.
+if [[ "$MODE" == "remove" ]]; then
+    rm -f "$PREF_FILE"
+    [[ -f "$TARGET_FILE" ]] || { echo "No COSMIC custom shortcut file; nothing to remove."; exit 0; }
+    python3 - "$TARGET_FILE" <<'PYREMOVE'
 from pathlib import Path
+import os, re, shutil, stat, sys, tempfile
+p = Path(sys.argv[1])
+text = p.read_text()
+new = re.sub(r'\n?\s*// CLIPREG-START.*?// CLIPREG-END\s*', '\n', text, flags=re.S)
+if new == text:
+    print('No ClipReg binding block found.')
+    raise SystemExit(0)
+backup = p.with_name(p.name + '.pre-clipreg-v2')
+if not backup.exists():
+    shutil.copy2(p, backup)
+fd, name = tempfile.mkstemp(prefix='.' + p.name + '.clipreg.', dir=p.parent)
+try:
+    mode = stat.S_IMODE(p.stat().st_mode)
+    os.fchmod(fd, mode)
+    with os.fdopen(fd, 'w') as f:
+        f.write(new)
+        f.flush(); os.fsync(f.fileno())
+    os.replace(name, p)
+    dfd = os.open(p.parent, os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0))
+    try: os.fsync(dfd)
+    finally: os.close(dfd)
+finally:
+    try: os.unlink(name)
+    except FileNotFoundError: pass
+print('ClipReg bindings removed; other COSMIC custom shortcuts preserved.')
+PYREMOVE
+    exit 0
+fi
+
+[[ -f "$KEYMAP" ]] || {
+    echo "ERROR: ClipReg key map not found: $KEYMAP" >&2
+    echo "Run install-clipreg.sh first, or set CLIPREG_KEYMAP." >&2
+    exit 1
+}
+
+python3 - "$KEYMAP" "$TARGET_FILE" "$MODE" <<'PY'
+from __future__ import annotations
+
+import os
 import re
+import shutil
+import stat
 import sys
+import tempfile
+import tomllib
+from pathlib import Path
 
-target = Path(sys.argv[1])
-mode = sys.argv[2]
-text = target.read_text()
+keymap_path = Path(sys.argv[1])
+target = Path(sys.argv[2])
+mode = sys.argv[3]
 
-# Remove only the block owned by this feature.
-text = re.sub(
-    r'\n?\s*// CLIPREG-START.*?// CLIPREG-END\s*',
-    '\n',
-    text,
-    flags=re.S,
-)
+VALID_REGISTER = re.compile(r"^[A-Za-z0-9._-]{1,32}$")
+VALID_SET = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+VALID_MODS = {"super": "Super", "ctrl": "Ctrl", "shift": "Shift", "alt": "Alt"}
+MOD_ORDER = {"Super": 0, "Ctrl": 1, "Shift": 2, "Alt": 3}
+BLOCK_RE = re.compile(r"\n?\s*// CLIPREG-START.*?// CLIPREG-END\s*", re.S)
 
-if mode == "skip":
-    target.write_text(text)
+
+def fail(message: str) -> None:
+    raise SystemExit(f"ERROR: {message}")
+
+
+def normalize_action(value: object, where: str):
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        fail(f"{where} must be an inline table or omitted")
+    key = value.get("key")
+    mods = value.get("modifiers", [])
+    if not isinstance(key, str) or not key or len(key) > 64 or any(c in key for c in ('"', '\\', '\n')):
+        fail(f"{where}.key must be a non-empty COSMIC key name without quotes/backslashes")
+    if not isinstance(mods, list) or not all(isinstance(m, str) for m in mods):
+        fail(f"{where}.modifiers must be a string array")
+    out: list[str] = []
+    for mod in mods:
+        canonical = VALID_MODS.get(mod.casefold())
+        if canonical is None:
+            fail(f"{where}: unsupported modifier {mod!r}; use Super/Ctrl/Shift/Alt")
+        if canonical in out:
+            fail(f"{where}: duplicate modifier {canonical}")
+        out.append(canonical)
+    out.sort(key=MOD_ORDER.__getitem__)
+    return key, tuple(out)
+
+
+def check_chords(entries, label: str) -> int:
+    seen: dict[tuple[str, tuple[str, ...]], str] = {}
+    count = 0
+    for group, reg, actions in entries:
+        for action_name, action in actions.items():
+            if action is None:
+                continue
+            key, mods = action
+            chord = (key.casefold(), mods)
+            desc = f"{group}:{reg}:{action_name}"
+            previous = seen.get(chord)
+            if previous:
+                pretty = '+'.join((*mods, key))
+                fail(f"duplicate shortcut in {label}: {pretty}: {previous} and {desc}")
+            seen[chord] = desc
+            count += 1
+    return count
+
+
+def atomic_replace(path: Path, text: str, make_backup: bool = True) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if make_backup and path.exists():
+        backup = path.with_name(path.name + '.pre-clipreg-v2')
+        if not backup.exists():
+            shutil.copy2(path, backup)
+    fd, name = tempfile.mkstemp(prefix='.' + path.name + '.clipreg.', dir=path.parent)
+    try:
+        mode = stat.S_IMODE(path.stat().st_mode) if path.exists() else 0o600
+        os.fchmod(fd, mode)
+        with os.fdopen(fd, 'w') as f:
+            f.write(text)
+            f.flush(); os.fsync(f.fileno())
+        os.replace(name, path)
+        dfd = os.open(path.parent, os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0))
+        try: os.fsync(dfd)
+        finally: os.close(dfd)
+    finally:
+        try: os.unlink(name)
+        except FileNotFoundError: pass
+
+
+with keymap_path.open('rb') as fh:
+    data = tomllib.load(fh)
+if data.get('version') != 1:
+    fail('keymap version must be 1')
+bindings = data.get('binding')
+if not isinstance(bindings, list) or not bindings:
+    fail('keymap contains no [[binding]] entries')
+
+parsed = []
+seen_binding: set[tuple[str, str]] = set()
+for index, entry in enumerate(bindings, 1):
+    where = f"binding #{index}"
+    if not isinstance(entry, dict):
+        fail(f"{where} is not a table")
+    reg = entry.get('register')
+    group = entry.get('set')
+    enabled = entry.get('enabled', True)
+    if not isinstance(reg, str) or not VALID_REGISTER.fullmatch(reg):
+        fail(f"{where}.register must match {VALID_REGISTER.pattern}")
+    if not isinstance(group, str) or not VALID_SET.fullmatch(group):
+        fail(f"{where}.set must match {VALID_SET.pattern}")
+    if not isinstance(enabled, bool):
+        fail(f"{where}.enabled must be true or false")
+    ident = (group, reg)
+    if ident in seen_binding:
+        fail(f"duplicate binding entry for set={group!r}, register={reg!r}")
+    seen_binding.add(ident)
+    actions = {name: normalize_action(entry.get(name), f"{where}.{name}") for name in ('grab','save','paste')}
+    if enabled and not any(actions.values()):
+        fail(f"{where} is enabled but defines no actions")
+    if enabled:
+        parsed.append((group, reg, actions))
+
+sets: list[str] = []
+for group, _, _ in parsed:
+    if group not in sets:
+        sets.append(group)
+
+# Alternate preset sets are allowed to reuse chords. Each set must be internally
+# unambiguous; combinations are checked when selected together.
+for group in sets:
+    check_chords([x for x in parsed if x[0] == group], f"set {group!r}")
+if 'digits' in sets and 'functions' in sets:
+    check_chords([x for x in parsed if x[0] in {'digits','functions'}], "established 'both' preset")
+
+if mode == 'list':
+    for group in sets:
+        regs = [reg for g, reg, _ in parsed if g == group]
+        print(f"{group}\t{len(regs)}\t{' '.join(regs)}")
+    raise SystemExit(0)
+if mode == 'check':
+    shortcuts = sum(sum(a is not None for a in actions.values()) for _,_,actions in parsed)
+    print(f"ClipReg key map OK: {len(parsed)} enabled bindings, {shortcuts} declared shortcuts, sets={','.join(sets)}")
     raise SystemExit(0)
 
-block = ""
-if mode != "remove":
-    block = "\n    // CLIPREG-START\n"
+if mode == 'digits':
+    wanted = ['digits']
+elif mode == 'functions':
+    wanted = ['functions']
+elif mode == 'both':
+    wanted = ['digits','functions']
+elif mode == 'all':
+    wanted = sets[:]
+elif mode.startswith('set:'):
+    raw = mode.split(':',1)[1]
+    wanted = [x for x in raw.split(',') if x]
+    if not wanted or any(not VALID_SET.fullmatch(x) for x in wanted):
+        fail('set:A[,B...] requires valid comma-separated set names')
+    if len(set(wanted)) != len(wanted):
+        fail('set list contains a duplicate name')
+else:
+    fail(f"unsupported renderer mode {mode}")
 
-    def add_binding(modifiers, key, command):
-        mods = "\n".join(f"            {m}," for m in modifiers)
-        return f'''    (\n        modifiers: [\n{mods}\n        ],\n        key: "{key}",\n    ): Spawn("{command}"),\n\n'''
+missing = [x for x in wanted if x not in sets]
+if missing:
+    fail('requested key-map set(s) not found: ' + ', '.join(missing))
+selected_entries = [x for x in parsed if x[0] in set(wanted)]
+selected_count = check_chords(selected_entries, 'selected set combination')
+if selected_count == 0:
+    fail('requested set produced no shortcuts')
 
-    if mode in {"digits", "both"}:
-        for key in ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]:
-            block += add_binding(
-                ["Super", "Shift"], key,
-                f"$HOME/.local/bin/clipreg save {key}",
-            )
-            block += add_binding(
-                ["Ctrl", "Shift"], key,
-                f"$HOME/.local/bin/clipreg paste {key}",
-            )
+if target.exists():
+    original = target.read_text()
+else:
+    original = "{\n}\n"
+text = BLOCK_RE.sub('\n', original)
 
-    if mode in {"functions", "both"}:
-        for number in range(1, 13):
-            key = f"F{number}"
-            block += add_binding(
-                ["Super", "Shift"], key,
-                f"$HOME/.local/bin/clipreg save {key}",
-            )
-            block += add_binding(
-                ["Ctrl", "Shift"], key,
-                f"$HOME/.local/bin/clipreg paste {key}",
-            )
+# Detect custom-shortcut collisions outside our managed block.
+existing: set[tuple[str, tuple[str, ...]]] = set()
+entry_re = re.compile(r'\(\s*modifiers:\s*\[(.*?)\],\s*key:\s*"([^"]+)",\s*\)\s*:', re.S)
+for match in entry_re.finditer(text):
+    raw_mods, key = match.groups()
+    mods = tuple(sorted(re.findall(r"\b(Super|Ctrl|Shift|Alt)\b", raw_mods), key=MOD_ORDER.__getitem__))
+    existing.add((key.casefold(), mods))
 
-    block += "    // CLIPREG-END\n"
+for _, reg, actions in selected_entries:
+    for action_name, action in actions.items():
+        if action is None:
+            continue
+        key, mods = action
+        if (key.casefold(), mods) in existing:
+            fail(f"{'+'.join((*mods,key))} for {action_name} {reg} conflicts with an existing COSMIC custom shortcut")
 
-pos = text.rfind("}")
-if pos == -1:
-    raise RuntimeError("Could not find closing brace in COSMIC shortcut file.")
 
-new_text = text[:pos].rstrip() + "\n" + block + "\n}\n"
-target.write_text(new_text)
-print(f"Clipboard-register bindings updated: {mode}")
-PYTHON
+def render_entry(reg: str, action_name: str, key: str, mods: tuple[str, ...]) -> str:
+    mod_lines = '\n'.join(f"            {m}," for m in mods)
+    command = f"$HOME/.local/bin/clipreg --notify {action_name} {reg}"
+    return (
+        "    (\n"
+        "        modifiers: [\n"
+        f"{mod_lines}\n"
+        "        ],\n"
+        f'        key: "{key}",\n'
+        "    ): "
+        f'Spawn("{command}"),\n\n'
+    )
+
+block = "\n    // CLIPREG-START\n"
+for _, reg, actions in selected_entries:
+    for action_name in ('grab','save','paste'):
+        action = actions[action_name]
+        if action is not None:
+            block += render_entry(reg, action_name, *action)
+block += "    // CLIPREG-END\n"
+
+pos = text.rfind('}')
+if pos < 0:
+    fail(f"could not find closing brace in COSMIC shortcut file {target}")
+new_text = text[:pos].rstrip() + '\n' + block + '\n}\n'
+atomic_replace(target, new_text)
+print(f"ClipReg bindings updated from {keymap_path}: {mode} ({selected_count} shortcuts)")
+PY
+
+case "$MODE" in
+    digits|functions|both|all|set:*) save_pref "$MODE" ;;
+esac

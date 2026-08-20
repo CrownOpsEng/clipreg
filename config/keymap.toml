@@ -1,0 +1,185 @@
+# ClipReg COSMIC shortcut map.
+#
+# Each binding maps an arbitrary register name to up to three independent
+# actions. Remove an action table to disable only that action. The key and
+# modifier list can differ per action.
+#
+# Allowed modifiers: Super, Ctrl, Shift, Alt.
+# Register names: A-Z/a-z/0-9 plus . _ - (max 32 chars).
+version = 1
+
+[[binding]]
+set = "digits"
+register = "1"
+enabled = true
+grab = { key = "1", modifiers = ["Super", "Shift"] }
+save = { key = "1", modifiers = ["Super", "Ctrl", "Shift"] }
+paste = { key = "1", modifiers = ["Ctrl", "Shift"] }
+
+[[binding]]
+set = "digits"
+register = "2"
+enabled = true
+grab = { key = "2", modifiers = ["Super", "Shift"] }
+save = { key = "2", modifiers = ["Super", "Ctrl", "Shift"] }
+paste = { key = "2", modifiers = ["Ctrl", "Shift"] }
+
+[[binding]]
+set = "digits"
+register = "3"
+enabled = true
+grab = { key = "3", modifiers = ["Super", "Shift"] }
+save = { key = "3", modifiers = ["Super", "Ctrl", "Shift"] }
+paste = { key = "3", modifiers = ["Ctrl", "Shift"] }
+
+[[binding]]
+set = "digits"
+register = "4"
+enabled = true
+grab = { key = "4", modifiers = ["Super", "Shift"] }
+save = { key = "4", modifiers = ["Super", "Ctrl", "Shift"] }
+paste = { key = "4", modifiers = ["Ctrl", "Shift"] }
+
+[[binding]]
+set = "digits"
+register = "5"
+enabled = true
+grab = { key = "5", modifiers = ["Super", "Shift"] }
+save = { key = "5", modifiers = ["Super", "Ctrl", "Shift"] }
+paste = { key = "5", modifiers = ["Ctrl", "Shift"] }
+
+[[binding]]
+set = "digits"
+register = "6"
+enabled = true
+grab = { key = "6", modifiers = ["Super", "Shift"] }
+save = { key = "6", modifiers = ["Super", "Ctrl", "Shift"] }
+paste = { key = "6", modifiers = ["Ctrl", "Shift"] }
+
+[[binding]]
+set = "digits"
+register = "7"
+enabled = true
+grab = { key = "7", modifiers = ["Super", "Shift"] }
+save = { key = "7", modifiers = ["Super", "Ctrl", "Shift"] }
+paste = { key = "7", modifiers = ["Ctrl", "Shift"] }
+
+[[binding]]
+set = "digits"
+register = "8"
+enabled = true
+grab = { key = "8", modifiers = ["Super", "Shift"] }
+save = { key = "8", modifiers = ["Super", "Ctrl", "Shift"] }
+paste = { key = "8", modifiers = ["Ctrl", "Shift"] }
+
+[[binding]]
+set = "digits"
+register = "9"
+enabled = true
+grab = { key = "9", modifiers = ["Super", "Shift"] }
+save = { key = "9", modifiers = ["Super", "Ctrl", "Shift"] }
+paste = { key = "9", modifiers = ["Ctrl", "Shift"] }
+
+[[binding]]
+set = "digits"
+register = "0"
+enabled = true
+grab = { key = "0", modifiers = ["Super", "Shift"] }
+save = { key = "0", modifiers = ["Super", "Ctrl", "Shift"] }
+paste = { key = "0", modifiers = ["Ctrl", "Shift"] }
+
+[[binding]]
+set = "functions"
+register = "F1"
+enabled = true
+grab = { key = "F1", modifiers = ["Super", "Shift"] }
+save = { key = "F1", modifiers = ["Super", "Ctrl", "Shift"] }
+paste = { key = "F1", modifiers = ["Ctrl", "Shift"] }
+
+[[binding]]
+set = "functions"
+register = "F2"
+enabled = true
+grab = { key = "F2", modifiers = ["Super", "Shift"] }
+save = { key = "F2", modifiers = ["Super", "Ctrl", "Shift"] }
+paste = { key = "F2", modifiers = ["Ctrl", "Shift"] }
+
+[[binding]]
+set = "functions"
+register = "F3"
+enabled = true
+grab = { key = "F3", modifiers = ["Super", "Shift"] }
+save = { key = "F3", modifiers = ["Super", "Ctrl", "Shift"] }
+paste = { key = "F3", modifiers = ["Ctrl", "Shift"] }
+
+[[binding]]
+set = "functions"
+register = "F4"
+enabled = true
+grab = { key = "F4", modifiers = ["Super", "Shift"] }
+save = { key = "F4", modifiers = ["Super", "Ctrl", "Shift"] }
+paste = { key = "F4", modifiers = ["Ctrl", "Shift"] }
+
+[[binding]]
+set = "functions"
+register = "F5"
+enabled = true
+grab = { key = "F5", modifiers = ["Super", "Shift"] }
+save = { key = "F5", modifiers = ["Super", "Ctrl", "Shift"] }
+paste = { key = "F5", modifiers = ["Ctrl", "Shift"] }
+
+[[binding]]
+set = "functions"
+register = "F6"
+enabled = true
+grab = { key = "F6", modifiers = ["Super", "Shift"] }
+save = { key = "F6", modifiers = ["Super", "Ctrl", "Shift"] }
+paste = { key = "F6", modifiers = ["Ctrl", "Shift"] }
+
+[[binding]]
+set = "functions"
+register = "F7"
+enabled = true
+grab = { key = "F7", modifiers = ["Super", "Shift"] }
+save = { key = "F7", modifiers = ["Super", "Ctrl", "Shift"] }
+paste = { key = "F7", modifiers = ["Ctrl", "Shift"] }
+
+[[binding]]
+set = "functions"
+register = "F8"
+enabled = true
+grab = { key = "F8", modifiers = ["Super", "Shift"] }
+save = { key = "F8", modifiers = ["Super", "Ctrl", "Shift"] }
+paste = { key = "F8", modifiers = ["Ctrl", "Shift"] }
+
+[[binding]]
+set = "functions"
+register = "F9"
+enabled = true
+grab = { key = "F9", modifiers = ["Super", "Shift"] }
+save = { key = "F9", modifiers = ["Super", "Ctrl", "Shift"] }
+paste = { key = "F9", modifiers = ["Ctrl", "Shift"] }
+
+[[binding]]
+set = "functions"
+register = "F10"
+enabled = true
+grab = { key = "F10", modifiers = ["Super", "Shift"] }
+save = { key = "F10", modifiers = ["Super", "Ctrl", "Shift"] }
+paste = { key = "F10", modifiers = ["Ctrl", "Shift"] }
+
+[[binding]]
+set = "functions"
+register = "F11"
+enabled = true
+grab = { key = "F11", modifiers = ["Super", "Shift"] }
+save = { key = "F11", modifiers = ["Super", "Ctrl", "Shift"] }
+paste = { key = "F11", modifiers = ["Ctrl", "Shift"] }
+
+[[binding]]
+set = "functions"
+register = "F12"
+enabled = true
+grab = { key = "F12", modifiers = ["Super", "Shift"] }
+save = { key = "F12", modifiers = ["Super", "Ctrl", "Shift"] }
+paste = { key = "F12", modifiers = ["Ctrl", "Shift"] }

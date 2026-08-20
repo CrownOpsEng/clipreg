@@ -1,35 +1,52 @@
-# ClipReg v0.1.0
+# ClipReg
 
-Persistent clipboard registers for Pop!_OS COSMIC/Wayland.
+Transactional persistent clipboard registers for COSMIC/Wayland.
 
-This is the original pre-native prototype. Registers are persisted inside a
-CopyQ tab and plain text is injected with `wtype`; rich content uses a temporary
-clipboard swap followed by restoration.
+**Version:** 0.2.0-dev.1 (development checkpoint; not released)
+**Status:** pre-1.0.
+**License:** GNU Affero General Public License v3.0 only (`AGPL-3.0-only`).
 
-## Commands
+ClipReg stores multi-MIME clipboard objects in named persistent registers while
+preserving the user's normal clipboard around grab/paste transactions. It uses
+Wayland ext-data-control for clipboard ownership/transfer, COSMIC toplevel info
+for active-app profiles, and a restricted uinput virtual keyboard for native
+Copy/Paste accelerators.
 
-```text
-clipreg save KEY
-clipreg paste KEY
-clipreg type KEY
-clipreg copy KEY
-clipreg show KEY
-clipreg clear KEY
-clipreg list
-clipreg doctor
+## Core commands
+
+- `clipreg grab NAME` — native Copy current app selection into a register, then restore clipboard.
+- `clipreg save NAME` — save current clipboard directly.
+- `clipreg primary NAME` — save current Wayland primary selection.
+- `clipreg paste NAME` — native-paste a register, then restore clipboard.
+- `clipreg copy NAME` — leave a register on the real clipboard.
+- `clipreg show|clear NAME`, `clipreg list`, `clipreg app`, `clipreg doctor`.
+- `clipreg autostart on|off|status`.
+
+Default COSMIC maps provide 1..9,0 and F1..F12 register sets. The map is
+customizable in `~/.config/clipreg/keymap.toml` and installed with
+`clipreg-keybinds`.
+
+## Build/test
+
+```bash
+./test.sh
+make clean selftest
 ```
 
-`KEY` may be `0..9` or `F1..F12`.
-
-Install with:
+A real install additionally requires `libwayland-dev` and `wayland-scanner`:
 
 ```bash
 ./scripts/install.sh
+clipreg doctor
 clipreg-keybinds
 ```
 
-This release is intentionally a prototype; its CopyQ-backed persistence and command behavior are not a stable API.
+## Runtime data
 
-## License
+- Config: `~/.config/clipreg/`
+- Registers: `~/.local/share/clipreg/registers/`
+- Runtime socket/recovery: `$XDG_RUNTIME_DIR/clipreg/`
+- User service: `clipreg.service`
 
-GNU Affero General Public License v3.0 only (`AGPL-3.0-only`).
+ClipReg refuses known password-manager secret markers from persistent register
+storage. v1 CopyQ-backed registers can be migrated read-only by the installer.

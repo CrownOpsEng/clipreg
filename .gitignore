@@ -1,8 +1,11 @@
+/build/
+*.o
 *.log
 *.bak
 *.zip
 *.tar.gz
 __pycache__/
 *.pyc
+.cache/
 .env
 .env.*

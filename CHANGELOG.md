@@ -1,11 +1,12 @@
 # Changelog
 
+## 0.2.0-dev.1
+
+Native transactional redesign development checkpoint (not released).
+
+- Replace the CopyQ-backed shell engine with a native Wayland daemon.
+- Add standalone multi-MIME storage, uinput input injection, COSMIC app profiles, crash recovery, autostart, configurable keymaps, and read-only v0.1 migration.
+
 ## v0.1.0
 
-Initial functional prototype.
-
-- Persistent `0..9` and `F1..F12` registers in a dedicated CopyQ tab.
-- Plain-text recall through `wtype` without changing the active clipboard.
-- Rich clipboard recall through temporary stage/paste/restore transactions.
-- Managed COSMIC digit/function keybinding presets.
-- Refuse known secret-marked clipboard content from persistent storage.
+Initial functional CopyQ/Bash prototype.
