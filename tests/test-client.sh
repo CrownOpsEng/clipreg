@@ -25,7 +25,7 @@ chmod +x "$TMP/bin/systemctl"
 export CLIPREG_TEST_SYSTEMCTL_LOG="$LOG"
 export PATH="$TMP/bin:/usr/bin:/bin"
 
-[[ "$($BIN --version)" == "0.2.0-dev.1" ]]
+[[ "$($BIN --version)" == "0.2.0-dev.2" ]]
 "$BIN" autostart on > "$TMP/on"
 grep -q 'autostart: on' "$TMP/on"
 grep -q '^--user enable --now clipreg.service$' "$LOG"

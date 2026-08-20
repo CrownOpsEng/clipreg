@@ -34,7 +34,7 @@
 #include <time.h>
 #include <unistd.h>
 
-#define CLIPREG_VERSION "0.2.0-dev.1"
+#define CLIPREG_VERSION "0.2.0-dev.2"
 #define MAGIC "CLPRG002"
 #define MAGIC_LEN 8
 #define OWNER_MIME "application/x-crownops-clipreg-owner"
@@ -1530,6 +1530,8 @@ static int command_clear(struct daemon_state *d, const char *reg, char *reply, s
     return 0;
 }
 
+static int ignore_sigpipe(void);
+
 static bool item_equal(const struct item *a, const struct item *b) {
     if (a->created_ms != b->created_ms || a->source_kind != b->source_kind ||
         strcmp(a->app_id, b->app_id) || a->count != b->count) return false;
@@ -1595,6 +1597,24 @@ static int selftest_main(void) {
 
     if (r == 0 && (!valid_register_name("F12") || !valid_register_name("address") ||
                    valid_register_name("bad/name") || valid_register_name(""))) r = -EBADMSG;
+
+    /* A clipboard consumer may close the Wayland transfer pipe before we
+     * finish writing. That must produce EPIPE, never terminate the daemon with
+     * SIGPIPE. This regression test mirrors source_send()'s write path. */
+    if (r == 0) {
+        r = ignore_sigpipe();
+        if (r == 0) {
+            int pp[2];
+            if (pipe2(pp, O_CLOEXEC) < 0) r = -errno;
+            else {
+                close(pp[0]);
+                const unsigned char byte = 0x42;
+                int wr = write_all_timeout(pp[1], &byte, 1U, 100);
+                close(pp[1]);
+                if (wr != -EPIPE) r = -EBADMSG;
+            }
+        }
+    }
 
     item_free(&content); item_free(&loaded); item_free(&original);
     char path[PATH_MAX];
@@ -1665,11 +1685,27 @@ static int setup_socket(struct daemon_state*d){unlink(d->socket_path);int fd=soc
 
 static void sig_handler(int sig){(void)sig;if(G)G->running=false;}
 
+/* Wayland clipboard consumers receive MIME payloads over pipes. A consumer is
+ * allowed to close its read end early (for example after probing a format).
+ * Without ignoring SIGPIPE, a perfectly ordinary short read can terminate the
+ * entire daemon before write(2) has a chance to report EPIPE. Treat it as an
+ * I/O failure for that transfer instead; source_send() records the failed
+ * transfer and the transaction can recover normally. */
+static int ignore_sigpipe(void) {
+    struct sigaction sa = {0};
+    sa.sa_handler = SIG_IGN;
+    if (sigemptyset(&sa.sa_mask) < 0) return -errno;
+    if (sigaction(SIGPIPE, &sa, NULL) < 0) return -errno;
+    return 0;
+}
+
 static int daemon_main(void) {
     struct daemon_state d = {0};
     d.uinput_fd = -1; d.listen_fd = -1; d.running = true;
     if (setup_paths(&d) < 0) return 1;
     G = &d;
+    int sr = ignore_sigpipe();
+    if (sr < 0) { logmsg("could not ignore SIGPIPE: %s", err_name(sr)); G = NULL; return 1; }
     load_config_file(&d); load_profiles(&d);
     int r = setup_wayland(&d);
     if (r < 0) { logmsg("Wayland setup failed: %s", err_name(r)); G = NULL; return 1; }
